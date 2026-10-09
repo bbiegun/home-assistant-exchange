@@ -31,8 +31,8 @@ blueprint:
         entity:
           filter:
             - domain: vacuum
-              supported_features:
-                - vacuum.VacuumEntityFeature.CLEAN_AREA
+#              supported_features:
+#                - vacuum.VacuumEntityFeature.CLEAN_AREA
     vacuum_2:
       name: Second vacuum
       description: Cleans each area after the first vacuum has finished it (e.g. mopping).
@@ -40,8 +40,8 @@ blueprint:
         entity:
           filter:
             - domain: vacuum
-              supported_features:
-                - vacuum.VacuumEntityFeature.CLEAN_AREA
+#              supported_features:
+#                - vacuum.VacuumEntityFeature.CLEAN_AREA
     rooms:
       name: Areas
       description: Areas to clean, in this order. Drag to reorder.
