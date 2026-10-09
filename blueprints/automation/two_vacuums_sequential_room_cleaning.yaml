@@ -43,6 +43,7 @@ blueprint:
     rooms:
       name: Areas
       description: Areas to clean, in this order. Drag to reorder.
+      default: []
       selector:
         area:
           multiple: true
