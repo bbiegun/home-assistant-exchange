@@ -8,6 +8,7 @@ blueprint:
     Both vacuums must support `vacuum.clean_area` and have their segments mapped to Home Assistant areas.
 
     Start automation by configured triggers (default rooms), or by firing the start event, optionally with custom areas:
+    
     ```
     - event: two_vacuums_clean_start
       event_data:
@@ -29,7 +30,7 @@ blueprint:
           filter:
             - domain: vacuum
               supported_features:
-                - 'vacuum.VacuumEntityFeature.CLEAN_AREA'
+                - vacuum.VacuumEntityFeature.CLEAN_AREA
     vacuum_2:
       name: Second vacuum
       description: Cleans each area after the first vacuum has finished it (e.g. mopping).
@@ -38,7 +39,7 @@ blueprint:
           filter:
             - domain: vacuum
               supported_features:
-                - 'vacuum.VacuumEntityFeature.CLEAN_AREA'
+                - vacuum.VacuumEntityFeature.CLEAN_AREA
     rooms:
       name: Areas
       description: Areas to clean, in this order. Drag to reorder.
