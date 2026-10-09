@@ -1,0 +1,251 @@
+blueprint:
+  name: Two vacuums - sequential room cleaning
+  description: >-
+    Cleans the selected areas one by one, in the order they are listed. The first vacuum cleans an area first; the second
+    vacuum cleans the same area only after the first vacuum has finished it. Both vacuums work at the same time on
+    different areas (e.g. vacuum 1 in room C while vacuum 2 is in room B).
+
+    Both vacuums must support `vacuum.clean_area` and have their segments mapped to Home Assistant areas.
+
+    Start automation by configured triggers (default rooms), or by firing the start event, optionally with custom areas:
+    ```
+    - event: two_vacuums_clean_start
+      event_data:
+        rooms: [kitchen, bathroom]
+    ```    
+    
+    Usage:
+      1. Regular cleaning schedule - create an automation with a time trigger and the rooms' selection.
+      2. Manual, custom cleaning - create an automation with empty room list, and fire the start event with custom rooms in the event data
+
+  source_url: https://github.com/bbiegun/home-assistant-exchange/blob/main/blueprints/automation/two_vacuums_sequential_room_cleaning.yaml
+  domain: automation
+  input:
+    vacuum_1:
+      name: First vacuum
+      description: Cleans each area first (e.g. vacuuming).
+      selector:
+        entity:
+          filter:
+            - domain: vacuum
+              supported_features:
+                - vacuum.VacuumEntityFeature.CLEAN_AREA
+    vacuum_2:
+      name: Second vacuum
+      description: Cleans each area after the first vacuum has finished it (e.g. mopping).
+      selector:
+        entity:
+          filter:
+            - domain: vacuum
+              supported_features:
+                - vacuum.VacuumEntityFeature.CLEAN_AREA
+    rooms:
+      name: Areas
+      description: Areas to clean, in this order. Drag to reorder.
+      selector:
+        area:
+          multiple: true
+          reorder: true
+    start_triggers:
+      name: Triggers
+      description: Optional triggers. Leave empty to run the automation manually.
+      default: []
+      selector:
+        trigger: {}
+    start_event:
+      name: Start event type
+      description: >-
+        Firing this event starts the cleaning. Optional event data `rooms`
+        (list of area ids or area names, in order) overrides the default areas.
+        Use a different event type for each automation created from this blueprint.
+      default: two_vacuums_clean_start
+      selector:
+        text: {}
+    conditions:
+      name: Conditions
+      description: Optional conditions. The automation runs only when they are all met.
+      default: []
+      selector:
+        condition: {}
+    pre_action:
+      name: Pre action
+      description: Actions run once before the first vacuum starts cleaning.
+      default: []
+      selector:
+        action: {}
+    post_action:
+      name: Post action
+      description: Actions run once after both vacuums have finished all areas.
+      default: []
+      selector:
+        action: {}
+    start_timeout:
+      name: Start timeout
+      description: Skip the area if the vacuum does not start cleaning within this time.
+      default:
+        minutes: 2
+      selector:
+        duration: {}
+    finished_for:
+      name: Finished state debounce
+      description: >-
+        How long the vacuum must stay returning/docked/idle before the area is
+        considered finished. Increase if the vacuum returns to the dock
+        mid-area (e.g. to wash its mop).
+      default:
+        seconds: 10
+      selector:
+        duration: {}
+    max_room_time:
+      name: Maximum time per area
+      description: The area is considered finished after this time even if the vacuum never reports it.
+      default:
+        hours: 3
+      selector:
+        duration: {}
+
+triggers:
+  - trigger: event
+    event_type: !input start_event
+    id: start_event
+  - triggers: !input start_triggers
+
+conditions: !input conditions
+
+variables:
+  vacuum_1: !input vacuum_1
+  vacuum_2: !input vacuum_2
+  vacuum_1_name: "{{ state_attr(vacuum_1, 'friendly_name') or vacuum_1 }}"
+  vacuum_2_name: "{{ state_attr(vacuum_2, 'friendly_name') or vacuum_2 }}"
+  default_rooms: !input rooms
+  # rooms may be overridden by the start event: area ids or area names
+  rooms: >-
+    {% set requested = trigger.event.data.rooms
+       if trigger is defined and trigger.id == 'start_event'
+          and trigger.event.data.rooms is defined
+       else none %}
+    {% if requested is string %}{% set requested = [requested] %}{% endif %}
+    {% if requested %}
+      {% set ns = namespace(ids=[]) %}
+      {% for r in requested %}
+        {% set ns.ids = ns.ids + [area_id(r) or r] %}
+      {% endfor %}
+      {{ ns.ids }}
+    {% else %}
+      {{ default_rooms }}
+    {% endif %}
+
+  finished_states:
+    - returning
+    - docked
+    - idle
+  # shared progress counter, written by vacuum 1 branch, read by vacuum 2 branch
+  rooms_done_by_vacuum_1: 0
+
+actions:
+  - sequence: !input pre_action
+  - parallel:
+      - sequence:
+          - action: logbook.log
+            data:
+              name: Two vacuums
+              message: "Started. Rooms: {{ rooms | map('area_name') | list  }}, vacuum 1 = {{ vacuum_1_name }}, vacuum 2 = {{ vacuum_2_name }}"
+          - repeat:
+              for_each: "{{ rooms }}"
+              sequence:
+                - action: logbook.log
+                  data:
+                    name: Two vacuums
+                    message: "{{ vacuum_1_name }} -> start room {{ area_name(repeat.item) }} ({{ repeat.index }}/{{ rooms | count }}), {{ vacuum_1_name }} state={{ states(vacuum_1) }}"
+                - action: vacuum.clean_area
+                  target:
+                    entity_id: "{{ vacuum_1 }}"
+                  data:
+                    cleaning_area_id:
+                      - "{{ repeat.item }}"
+                - wait_template: "{{ is_state(vacuum_1, 'cleaning') }}"
+                  timeout: !input start_timeout
+                  continue_on_timeout: true
+                - action: logbook.log
+                  data:
+                    name: Two vacuums
+                    message: "{{ vacuum_1_name }} room {{ area_name(repeat.item) }}: cleaning started={{ wait.completed }}, state={{ states(vacuum_1) }}"
+                - if:
+                    - condition: template
+                      value_template: "{{ wait.completed }}"
+                  then:
+                    - wait_for_trigger:
+                        - trigger: template
+                          value_template: "{{ states(vacuum_1) in finished_states }}"
+                          for: !input finished_for
+                      timeout: !input max_room_time
+                      continue_on_timeout: true
+                - action: logbook.log
+                  data:
+                    name: Two vacuums
+                    message: "{{ vacuum_1_name }} room {{ area_name(repeat.item) }}: finished, state={{ states(vacuum_1) }}"
+                - variables:
+                    rooms_done_by_vacuum_1: "{{ repeat.index }}"
+                - event: two_vacuums_room_done
+                  event_data:
+                    automation: "{{ this.entity_id }}"
+                    area_id: "{{ repeat.item }}"
+                    index: "{{ repeat.index }}"
+      - sequence:
+          - repeat:
+              for_each: "{{ rooms }}"
+              sequence:
+                - variables:
+                    vacuum_2_room_index: "{{ repeat.index }}"
+                - repeat:
+                    while:
+                      - condition: template
+                        value_template: "{{ rooms_done_by_vacuum_1 | int < vacuum_2_room_index | int }}"
+                    sequence:
+                      - action: logbook.log
+                        data:
+                          name: Two vacuums
+                          message: "{{ vacuum_2_name }} waiting for {{ vacuum_1_name }} to finish room {{ area_name(repeat.item) }} ({{ vacuum_1_name }} done counter={{ rooms_done_by_vacuum_1 }}, needed={{ vacuum_2_room_index }})"
+                      - wait_for_trigger:
+                          - trigger: event
+                            event_type: two_vacuums_room_done
+                        timeout: "00:00:30"
+                        continue_on_timeout: true
+                      - action: logbook.log
+                        data:
+                          name: Two vacuums
+                          message: "{{ vacuum_2_name }} wait ended: event received={{ wait.trigger is not none }}, {{ vacuum_1_name }} done counter={{ rooms_done_by_vacuum_1 }}"
+                - action: logbook.log
+                  data:
+                    name: Two vacuums
+                    message: "{{ vacuum_2_name }} -> start room {{ area_name(repeat.item) }} ({{ repeat.index }}/{{ rooms | count }}), {{ vacuum_2_name }} state={{ states(vacuum_2) }}"
+                - action: vacuum.clean_area
+                  target:
+                    entity_id: "{{ vacuum_2 }}"
+                  data:
+                    cleaning_area_id:
+                      - "{{ repeat.item }}"
+                - wait_template: "{{ is_state(vacuum_2, 'cleaning') }}"
+                  timeout: !input start_timeout
+                  continue_on_timeout: true
+                - action: logbook.log
+                  data:
+                    name: Two vacuums
+                    message: "{{ vacuum_2_name }} room {{ area_name(repeat.item) }}: cleaning started={{ wait.completed }}, state={{ states(vacuum_2) }}"
+                - if:
+                    - condition: template
+                      value_template: "{{ wait.completed }}"
+                  then:
+                    - wait_for_trigger:
+                        - trigger: template
+                          value_template: "{{ states(vacuum_2) in finished_states }}"
+                          for: !input finished_for
+                      timeout: !input max_room_time
+                      continue_on_timeout: true
+                - action: logbook.log
+                  data:
+                    name: Two vacuums
+                    message: "{{ vacuum_2_name }} room {{ area_name(repeat.item) }}: finished, state={{ states(vacuum_2) }}"
+  - sequence: !input post_action
+
+mode: single
